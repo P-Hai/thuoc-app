@@ -35,17 +35,6 @@ const timeAgo = (iso) => {
   return new Date(iso).toLocaleString("vi-VN");
 };
 
-const sendNotif = (title, body) => {
-  if (Notification.permission === "granted") {
-    new Notification(title, {
-      body,
-      icon: "https://cdn.jsdelivr.net/npm/twemoji@14/assets/72x72/1f48a.png",
-      tag: "medicine-reminder",
-      renotify: true,
-    });
-  }
-};
-
 export default function App() {
   const [status, setStatus]         = useState({});
   const [loading, setLoading]       = useState(true);
@@ -53,76 +42,31 @@ export default function App() {
   const [view, setView]             = useState("home");
   const [history, setHistory]       = useState([]);
   const [currentDay, setCurrentDay] = useState(today());
-  const [notifPerm, setNotifPerm]   = useState(
-    typeof Notification !== "undefined" ? Notification.permission : "denied"
-  );
-  const [showBanner, setShowBanner] = useState(false);
-  const alreadyNotified = useRef({});
-  const prevStatus      = useRef({});
 
-  // ── Detect ngày mới mỗi 30s ───────────────
+  // Detect ngày mới mỗi 30s
   useEffect(() => {
     const iv = setInterval(() => {
       const newDay = today();
       if (newDay !== currentDay) {
         setCurrentDay(newDay);
         setStatus({});
-        prevStatus.current = {};
-        alreadyNotified.current = {};
       }
     }, 30000);
     return () => clearInterval(iv);
   }, [currentDay]);
 
-  // ── Realtime listener ──────────────────────
+  // Realtime listener
   useEffect(() => {
     setLoading(true);
     const todayRef = ref(db, `medicine/${currentDay}`);
     const unsub = onValue(todayRef, (snap) => {
-      const val = snap.val() || {};
-      MEDICINES.forEach((m) => {
-        if (val[m.id] && !prevStatus.current[m.id]) {
-          sendNotif("✅ Mạ đã uống thuốc!", `${m.label} lúc ${timeAgo(val[m.id]?.takenAt)} 🎉`);
-        }
-      });
-      prevStatus.current = val;
-      setStatus(val);
-      checkOverdue(val);
+      setStatus(snap.val() || {});
       setLoading(false);
     });
     return () => unsub();
   }, [currentDay]);
 
-  // ── Show permission banner ─────────────────
-  useEffect(() => {
-    if (Notification.permission === "default") setShowBanner(true);
-  }, []);
-
-  // ── Overdue checker every 60s ──────────────
-  useEffect(() => {
-    const iv = setInterval(() => checkOverdue(prevStatus.current), 60000);
-    return () => clearInterval(iv);
-  }, []);
-
-  const checkOverdue = (s) => {
-    const now = new Date();
-    MEDICINES.forEach((m) => {
-      if (s[m.id]) return;
-      const scheduled = new Date();
-      scheduled.setHours(m.hour, m.minute || 0, 0, 0);
-      const diffMin = (now - scheduled) / 60000;
-      const key = `${currentDay}_${m.id}`;
-      if (diffMin >= 30 && diffMin < 180 && !alreadyNotified.current[key]) {
-        alreadyNotified.current[key] = true;
-        sendNotif(
-          "⚠️ Mạ chưa uống thuốc!",
-          `${m.label} (${m.time}) đã quá 30 phút. Nhắc mạ nhé! 💊`
-        );
-      }
-    });
-  };
-
-  // ── Load 7-day history ─────────────────────
+  // Load 7-day history
   const loadHistory = () => {
     const histRef = ref(db, "medicine");
     onValue(histRef, (snap) => {
@@ -136,7 +80,7 @@ export default function App() {
     }, { onlyOnce: true });
   };
 
-  // ── Toggle medicine ────────────────────────
+  // Toggle medicine
   const toggle = async (id) => {
     const updated = { ...status };
     if (updated[id]) {
@@ -149,18 +93,6 @@ export default function App() {
     await set(ref(db, `medicine/${currentDay}`), updated);
   };
 
-  const requestNotif = async () => {
-    const perm = await Notification.requestPermission();
-    setNotifPerm(perm);
-    setShowBanner(false);
-    if (perm === "granted")
-      sendNotif("✅ Đã bật thông báo!", "Cả nhà sẽ nhận nhắc khi mạ quên uống thuốc 💊");
-  };
-
-  const takenCount = MEDICINES.filter((m) => status[m.id]).length;
-  const allDone    = takenCount === MEDICINES.length;
-  const pct        = Math.round((takenCount / MEDICINES.length) * 100);
-
   const isOverdue = (m) => {
     if (status[m.id]) return false;
     const scheduled = new Date();
@@ -168,42 +100,13 @@ export default function App() {
     return (new Date() - scheduled) / 60000 >= 30;
   };
 
+  const takenCount = MEDICINES.filter((m) => status[m.id]).length;
+  const allDone    = takenCount === MEDICINES.length;
+  const pct        = Math.round((takenCount / MEDICINES.length) * 100);
+
   return (
     <div style={s.root}>
       <div style={s.container}>
-
-        {/* Permission Banner */}
-        {showBanner && (
-          <div style={s.permBanner}>
-            <div style={s.permRow}>
-              <span style={{ fontSize: 24 }}>🔔</span>
-              <div>
-                <div style={{ fontWeight: 700 }}>Bật thông báo cho cả nhà</div>
-                <div style={{ fontSize: 13, color: "#92400e", marginTop: 2 }}>
-                  Mỗi người mở web và bấm đồng ý để nhận nhắc khi mạ quên
-                </div>
-              </div>
-            </div>
-            <div style={s.permBtns}>
-              <button onClick={requestNotif} style={s.btnYes}>Bật ngay 🔔</button>
-              <button onClick={() => setShowBanner(false)} style={s.btnNo}>Để sau</button>
-            </div>
-          </div>
-        )}
-
-        {/* Notif status pill */}
-        {!showBanner && (
-          <div
-            onClick={notifPerm !== "granted" ? requestNotif : undefined}
-            style={{
-              ...s.pill,
-              background: notifPerm === "granted" ? "#dcfce7" : "#fee2e2",
-              color: notifPerm === "granted" ? "#15803d" : "#b91c1c",
-            }}
-          >
-            {notifPerm === "granted" ? "🔔 Thông báo đã bật" : "🔕 Chưa bật thông báo — bấm để bật"}
-          </div>
-        )}
 
         {/* Header */}
         <div style={s.header}>
@@ -346,12 +249,6 @@ export default function App() {
 const s = {
   root:          { minHeight: "100vh", background: "linear-gradient(160deg,#fff7ed,#fef3c7 50%,#ecfdf5)", fontFamily: "'Segoe UI',sans-serif", display: "flex", justifyContent: "center", padding: "16px 16px 48px" },
   container:     { width: "100%", maxWidth: 480 },
-  permBanner:    { background: "#fef3c7", border: "2px solid #fbbf24", borderRadius: 16, padding: "14px 16px", marginBottom: 12 },
-  permRow:       { display: "flex", gap: 12, alignItems: "flex-start", marginBottom: 12 },
-  permBtns:      { display: "flex", gap: 8 },
-  btnYes:        { flex: 1, padding: "10px", borderRadius: 10, border: "none", background: "#f59e0b", color: "white", fontWeight: 700, fontSize: 14, cursor: "pointer" },
-  btnNo:         { padding: "10px 14px", borderRadius: 10, border: "1.5px solid #d1d5db", background: "white", color: "#6b7280", fontSize: 13, cursor: "pointer" },
-  pill:          { display: "inline-block", padding: "7px 14px", borderRadius: 99, fontSize: 13, fontWeight: 600, marginBottom: 12, cursor: "pointer" },
   header:        { textAlign: "center", marginBottom: 18 },
   title:         { fontSize: 26, fontWeight: 800, color: "#1f2937", margin: "4px 0" },
   date:          { fontSize: 14, color: "#6b7280", margin: 0, textTransform: "capitalize" },
@@ -373,5 +270,4 @@ const s = {
   histDate:      { fontSize: 13, color: "#374151", width: 75, flexShrink: 0, fontWeight: 500 },
   dots:          { display: "flex", gap: 8, flex: 1 },
   dot:           { width: 20, height: 20, borderRadius: "50%", display: "inline-block" },
-  footer:        { textAlign: "center", fontSize: 11, color: "#9ca3af", margin: 0 },
 };
